@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using System.Management;
+using System.Runtime.InteropServices;
 
 namespace SMBIOS
 {
@@ -15,39 +15,36 @@ namespace SMBIOS
         public List<SMBIOStable> p_oSMBIOStables;
         private const string OUT_OF_SPEC = "<OUT OF SPEC>";
 
-        public SMBIOSdata() {
+        public SMBIOSdata()
+        {
             m_pbBIOSData = new byte[] { };
             p_oSMBIOStables = new List<SMBIOStable>();
         }
 
-        public void GetRawData(string hostname = "localhost")
+        [DllImport("kernel32")]
+        private static extern int GetSystemFirmwareTable(int FirmwareTableProviderSignature, int FirmwareTableID, byte[] pFirmwareTableBuffer, int BufferSize);
+
+        public void GetRawData()
         {
-            try
+            int result = GetSystemFirmwareTable(1381190978, 0, null, 0);
+            if (result == 0)
+                throw new Exception("No data");
+
+            m_pbBIOSData = new byte[result];
+            if (GetSystemFirmwareTable(1381190978, 0, m_pbBIOSData, result) != result)
             {
-                ManagementScope scope = new ManagementScope("\\\\" + hostname + "\\root\\WMI");
-                scope.Connect();
-                ObjectQuery wmiquery = new ObjectQuery("SELECT * FROM MSSmBios_RawSMBiosTables");
-                ManagementObjectSearcher searcher = new ManagementObjectSearcher(scope, wmiquery);
-                ManagementObjectCollection coll = searcher.Get();
-                foreach (ManagementObject queryObj in coll)
-                {
-                    if (queryObj["SMBiosData"] != null) m_pbBIOSData = (byte[])(queryObj["SMBiosData"]);
-                    if (queryObj["SmbiosMajorVersion"] != null) m_byMajorVersion = (byte)(queryObj["SmbiosMajorVersion"]);
-                    if (queryObj["SmbiosMinorVersion"] != null) m_byMinorVersion = (byte)(queryObj["SmbiosMinorVersion"]);
-                    //if (queryObj["Size"] != null) m_dwLen = (long)(queryObj["Size"]);
-                    m_dwLen = m_pbBIOSData.Length;
-                }
+                throw new Exception("Result not equal requested size");
             }
-            catch
-            {
-            }
+            m_byMajorVersion = m_pbBIOSData[1];
+            m_byMinorVersion = m_pbBIOSData[2];
+            m_dwLen = result;
         }
 
-                
+
         public void GetTables()
         {
-            int i = 0;
-            while(i < m_dwLen)
+            int i = 8;
+            while (i < m_dwLen)
             {
                 SMBIOStable p_oTable = new SMBIOStable();
                 p_oTable.m_bTableType = m_pbBIOSData[i];
@@ -56,12 +53,12 @@ namespace SMBIOS
 
                 int wUnformattedSectionStart = i + p_oTable.m_bFormattedSectionLength;
                 p_oTable.p_bFormattedSection = m_pbBIOSData.Skip(i).Take(p_oTable.m_bFormattedSectionLength).ToArray();
-                
-                for(int j = i + p_oTable.m_bFormattedSectionLength; ;j++)
+
+                for (int j = i + p_oTable.m_bFormattedSectionLength; ; j++)
                 {
-                    if((m_pbBIOSData[j] == 0) && (m_pbBIOSData[j+1] == 0))
+                    if ((m_pbBIOSData[j] == 0) && (m_pbBIOSData[j + 1] == 0))
                     {
-                        p_oTable.p_bUnformattedSection = m_pbBIOSData.Skip(i+p_oTable.m_bFormattedSectionLength).Take(j-i-p_oTable.m_bFormattedSectionLength).ToArray();
+                        p_oTable.p_bUnformattedSection = m_pbBIOSData.Skip(i + p_oTable.m_bFormattedSectionLength).Take(j - i - p_oTable.m_bFormattedSectionLength).ToArray();
                         i = j + 2;
                         break;
                     }
@@ -90,14 +87,14 @@ namespace SMBIOS
                     Console.WriteLine("\tProduct Name: " + table.p_sStrings[table.p_bFormattedSection[5] - 1]);
                     Console.WriteLine("\tVersion: " + (table.p_bFormattedSection[6] != 0 ? table.p_sStrings[table.p_bFormattedSection[6] - 1] : ""));
                     Console.WriteLine("\tSerial Number: " + table.p_sStrings[table.p_bFormattedSection[7] - 1]);
-                    Console.WriteLine("\tUUID: " + dmi_system_uuid(new ArraySegment<byte>(table.p_bFormattedSection,8,16).ToArray(), (ushort)(m_byMajorVersion + (m_byMinorVersion << 8))));
+                    Console.WriteLine("\tUUID: " + dmi_system_uuid(new ArraySegment<byte>(table.p_bFormattedSection, 8, 16).ToArray(), (ushort)(m_byMajorVersion + (m_byMinorVersion << 8))));
                     Console.WriteLine("\tWake-up type: " + dmi_system_wake_up_type(table.p_bFormattedSection[24]));
                     Console.WriteLine("\tSKU Number: " + (table.p_bFormattedSection[25] != 0 ? table.p_sStrings[table.p_bFormattedSection[25] - 1] : ""));
                     Console.WriteLine("\tFamily: " + (table.p_bFormattedSection[26] != 0 ? table.p_sStrings[table.p_bFormattedSection[26] - 1] : ""));
                     break;
                 case 4: //Processor
                     Console.WriteLine("Procesor information");
-                    Console.WriteLine("\tSocket Designation: " + table.p_sStrings[table.p_bFormattedSection[4]-1]);
+                    Console.WriteLine("\tSocket Designation: " + table.p_sStrings[table.p_bFormattedSection[4] - 1]);
                     Console.WriteLine("\tType: " + dmi_processor_type(table.p_bFormattedSection[5]));
                     Console.WriteLine("\tFamily: " + dmi_processor_family(table.p_bFormattedSection[6]));
                     Console.WriteLine("\tVoltage: " + dmi_processor_voltage(table.p_bFormattedSection[17]));
@@ -105,8 +102,8 @@ namespace SMBIOS
                     break;
                 case 9: //System slot
                     Console.WriteLine("System slot information");
-                    Console.WriteLine("\tSlot designation: " + table.p_sStrings[table.p_bFormattedSection[4]-1]);
-                    Console.WriteLine("\tSlot type: " +dmi_slot_type(table.p_bFormattedSection[5]));
+                    Console.WriteLine("\tSlot designation: " + table.p_sStrings[table.p_bFormattedSection[4] - 1]);
+                    Console.WriteLine("\tSlot type: " + dmi_slot_type(table.p_bFormattedSection[5]));
                     Console.WriteLine("\tSlot Data Bus Width: " + dmi_slot_bus_width(table.p_bFormattedSection[6]));
                     Console.WriteLine("\tCurrent usage: " + dmi_slot_usage(table.p_bFormattedSection[7]));
                     Console.WriteLine("\tSlot length: " + dmi_slot_length(table.p_bFormattedSection[8]));
@@ -118,7 +115,7 @@ namespace SMBIOS
                     break;
                 case 10: //On Board Devices Information
                     Console.WriteLine("Onboard device information");
-                    Console.WriteLine(dmi_on_board_devices(new ArraySegment<byte>(table.p_bFormattedSection, 4, table.p_bFormattedSection.Length-4).ToArray(), Convert.ToByte((table.p_bFormattedSection.Length - 4) / 2), table.p_sStrings));
+                    Console.WriteLine(dmi_on_board_devices(new ArraySegment<byte>(table.p_bFormattedSection, 4, table.p_bFormattedSection.Length - 4).ToArray(), Convert.ToByte((table.p_bFormattedSection.Length - 4) / 2), table.p_sStrings));
                     break;
                 case 12: //System Configuration Options (Type 12)
                     Console.WriteLine("System Configuration Options");
@@ -447,10 +444,15 @@ namespace SMBIOS
                 "PCI PME#",
                 "AC Power Restored" /* 0x08 */
             };
-            return type[code - 1];
+
+            if (code < type.Length)
+                return type[code];
+
+            return "Unknown code: " + code.ToString();
         }
 
-        private string dmi_system_uuid(byte[] p, ushort ver) {
+        private string dmi_system_uuid(byte[] p, ushort ver)
+        {
             bool only0xFF = true, only0x00 = true;
             int i;
             string result = "";
@@ -463,12 +465,12 @@ namespace SMBIOS
 
             if (only0xFF)
             {
-                result+="Not Present";
+                result += "Not Present";
                 return result;
             }
             if (only0x00)
             {
-                result+="Not Settable";
+                result += "Not Settable";
                 return result;
             }
 
@@ -499,7 +501,7 @@ namespace SMBIOS
         {
             string result = "";
 
-            for(var i = 0; i < count; i++)
+            for (var i = 0; i < count; i++)
             {
                 result += "\t" + strings[i];
                 if (i > 0) result += "\n";
@@ -567,9 +569,9 @@ namespace SMBIOS
             };
             if (code >= 0x01 && code <= 0x08)
                 return interface0x00[code - 0x01];
-	        if (code >= 0xA0 && code <= 0xA2)
-		        return interface0xA0[code - 0xA0];
-	        return OUT_OF_SPEC;
+            if (code >= 0xA0 && code <= 0xA2)
+                return interface0xA0[code - 0xA0];
+            return OUT_OF_SPEC;
         }
 
         /*
@@ -607,8 +609,7 @@ namespace SMBIOS
                 else
                     result += string.Format("\tOn Board Device %d Information\n", i + 1);
                 result += string.Format("\t\tType: {0:s}\n", dmi_on_board_devices_type(Convert.ToByte(p[2 * i] & 0x7F)));
-                result += string.Format("\t\tStatus: {0:s}\n", Convert.ToBoolean(p[2 * i] & 0x80) ? "Enabled" : "Disabled");
-                var u = p[2 * i + 1] - 1;
+                result += string.Format("\t\tStatus: {0:s}\n", (p[2 * i] & 0x80) != 0 ? "Enabled" : "Disabled");
                 result += string.Format("\t\tDescription: {0:s}\n", strings[p[2 * i + 1] - 1]);
             }
             return result;
